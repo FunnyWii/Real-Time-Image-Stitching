@@ -1,8 +1,0 @@
-对于l70/lr0/r70这三张图片
-Python代码可以进行拼接
-
-使用orb和surf不能拼接（只有中间有右边可以拼接）
-sift可以拼接（conf thresh<0.6）
-./StitchTestDetail ../imgs/l70.jpg ../imgs/lr0.jpg ../imgs/r70.jpg --conf_thresh 0.5  --features sift
-
-warp_type 为spherical和投影变换类型，全景选spherical或cylindrical效果差不多

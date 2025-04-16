@@ -130,8 +130,8 @@ int expos_comp_nr_filtering = 2;    //曝光补偿增益的过滤迭代次数？
 int expos_comp_block_size = 32;     //曝光补偿的块大小 px
 string seam_find_type = "gc_color";     //拼接缝估计方法，gc_colorgrad质量最高
 int blend_type = Blender::MULTI_BAND;   //图像混合方法
-int timelapse_type = Timelapser::AS_IS; //混合强度 0-100
-float blend_strength = 5;
+int timelapse_type = Timelapser::AS_IS; 
+float blend_strength = 5;   //混合强度 0-100
 string result_name = "../res/result.jpg";
 bool timelapse = false;
 int range_width = -1;   // 图像匹配的范围宽度
@@ -375,6 +375,12 @@ static int parseCmdArgs(int argc, char** argv)
     }
     return 0;
 }
+
+
+
+
+
+// main 函数
 int main(int argc, char* argv[])
 {
 #if ENABLE_LOG
@@ -393,6 +399,7 @@ int main(int argc, char* argv[])
         LOGLN("Need more images");
         return -1;
     }
+    // 为scale设置初始值，即使不需要更新scale，后面也会把is_**_set设置为true
     double work_scale = 1, seam_scale = 1, compose_scale = 1;
     bool is_work_scale_set = false, is_seam_scale_set = false, is_compose_scale_set = false;
     LOGLN("Finding features...");
@@ -422,12 +429,12 @@ int main(int argc, char* argv[])
         cout << "Unknown 2D features type: '" << features_type << "'.\n";
         return -1;
     }
-    Mat full_img, img;
-    vector<ImageFeatures> features(num_images);
-    vector<Mat> images(num_images);
-    vector<Size> full_img_sizes(num_images);
+    Mat full_img, img;      //完整图像 以及 缩放后的图像（可能不缩放）
+    vector<ImageFeatures> features(num_images); //找到的features，其中ImageFeatures是一个新的结构体，包含了keypoints和descriptors
+    vector<Mat> images(num_images);             //images[i]是缩放后的图像
+    vector<Size> full_img_sizes(num_images);    //原始图像的大小
     double seam_work_aspect = 1;
-    for (int i = 0; i < num_images; ++i)
+    for (int i = 0; i < num_images; ++i)        //从文件夹中读取图像
     {
         full_img = imread(samples::findFile(img_names[i]));
         full_img_sizes[i] = full_img.size();
@@ -436,6 +443,7 @@ int main(int argc, char* argv[])
             LOGLN("Can't open image " << img_names[i]);
             return -1;
         }
+        // 设置图像的工作分辨率，可能涉及resize()
         if (work_megapix < 0)
         {
             img = full_img;
@@ -452,16 +460,22 @@ int main(int argc, char* argv[])
             resize(full_img, img, Size(), work_scale, work_scale, INTER_LINEAR_EXACT);
         }
         std::cout << "Work scale is : " << work_scale << std::endl;
+        // 到上面这里，full_img -> img，可能直接拷贝也可能resize
+        // 设置拼接缝分辨率
         if (!is_seam_scale_set)
         {
             seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img.size().area()));
             seam_work_aspect = seam_scale / work_scale;
             is_seam_scale_set = true;
         }
+        // 计算Features，保存在features[i]中
+        // TODO 需要测试这里的img和上面resize的img有啥区别 imshow一下
         computeImageFeatures(finder, img, features[i]);
         features[i].img_idx = i;
         LOGLN("Features in image #" << i+1 << ": " << features[i].keypoints.size());
         resize(full_img, img, Size(), seam_scale, seam_scale, INTER_LINEAR_EXACT);
+        // img -> images
+        // img & full_img ×
         images[i] = img.clone();
     }
     full_img.release();
@@ -471,8 +485,8 @@ int main(int argc, char* argv[])
 #if ENABLE_LOG
     t = getTickCount();
 #endif
-    vector<MatchesInfo> pairwise_matches;
-    Ptr<FeaturesMatcher> matcher;
+    vector<MatchesInfo> pairwise_matches;       // 新的结构体，保存match-idx
+    Ptr<FeaturesMatcher> matcher;               // 匹配器设置
     if (matcher_type == "affine")
         matcher = makePtr<AffineBestOf2NearestMatcher>(false, try_cuda, match_conf);
     else if (range_width==-1)
@@ -490,6 +504,7 @@ int main(int argc, char* argv[])
         f << matchesGraphAsString(img_names, pairwise_matches, conf_thresh);
     }
     // Leave only images we are sure are from the same panorama
+    
     vector<int> indices = leaveBiggestComponent(features, pairwise_matches, conf_thresh);
     vector<Mat> img_subset;
     vector<String> img_names_subset;
@@ -740,6 +755,7 @@ int main(int argc, char* argv[])
     Ptr<Timelapser> timelapser;
     //double compose_seam_aspect = 1;
     double compose_work_aspect = 1;
+    //--------------------------------------------------------------------------------------------------------------------------
     for (int img_idx = 0; img_idx < num_images; ++img_idx)
     {
         LOGLN("Compositing image #" << indices[img_idx]+1);
@@ -847,6 +863,7 @@ int main(int argc, char* argv[])
             blender->feed(img_warped_s, mask_warped, corners[img_idx]);
         }
     }
+    //--------------------------------------------------------------------------------------------------------------------------
     if (!timelapse)
     {
         Mat result, result_mask;
