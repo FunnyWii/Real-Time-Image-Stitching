@@ -277,7 +277,6 @@ int main (int argc, char* argv[])
     compensator->feed(corners, images_warped, masks_warped);
     LOGLN("Compensating exposure, time: " << ((cv::getTickCount() - t) / cv::getTickFrequency()) << " sec");
 
-
     // ----------------- finding seams -------------------------------
     LOGLN("Finding seams...");
 #if ENABLE_LOG
@@ -300,8 +299,6 @@ int main (int argc, char* argv[])
 
     // ----------------- Compositing -------------------------------
     LOGLN("Compositing...");
-
-
 
     // Loop
     int loop_count = 0;
@@ -341,7 +338,28 @@ int main (int argc, char* argv[])
             sizes[i] = roi.size();
         }
     }
-
+    std::vector<cv::Mat> intrinsicMat(num_images);
+    std::vector<cv::Mat> temp_dilated_mask(num_images);
+    std::vector<cv::Mat> temp_mask_warped(num_images);
+    std::vector<cv::Mat> temp_seam_mask(num_images);
+    std::vector<cv::Mat> saved_final_mask_warped(num_images);
+    cv::Size origin_size = cv::Size(1920,1080);
+    if (abs(compose_scale - 1) > 1e-1){
+        origin_size.width = static_cast<int>(origin_size.width * compose_scale);
+        origin_size.height = static_cast<int>(origin_size.height * compose_scale);
+    }
+    for(int i = 0; i < num_images; ++i){
+        cameras[i].K().convertTo(intrinsicMat[i], CV_32F);
+        cv::Mat temp_mask;
+        temp_mask.create(origin_size, CV_8U);
+        temp_mask.setTo(cv::Scalar::all(255));
+        warper->warp(temp_mask, intrinsicMat[i], cameras[i].R, cv::INTER_NEAREST, cv::BORDER_CONSTANT, temp_mask_warped[i]); 
+        dilate(masks_warped[i], temp_dilated_mask[i], cv::Mat());
+        cv::resize(temp_dilated_mask[i], temp_seam_mask[i], temp_mask_warped[i].size(), 0, 0, cv::INTER_LINEAR_EXACT);
+        saved_final_mask_warped[i] = temp_seam_mask[i] & temp_mask_warped[i];
+        // cv::imwrite("../res/loop" + std::to_string(loop_count) + "saved_final_mask_warped" + std::to_string(i) + ".jpg", saved_final_mask_warped[i]);
+        // TODO : release 
+    }
 
     if (!blender && !timelapse) {
         blender = cv::detail::Blender::createDefault(blend_type, try_cuda);
@@ -367,7 +385,7 @@ int main (int argc, char* argv[])
         timelapser = cv::detail::Timelapser::createDefault(timelapse_type);
         timelapser->initialize(corners, sizes);
     }
-
+    // ------------------------ INTO WHILE LOOP
     while(true){
     #if ENABLE_LOG
         t = cv::getTickCount();
@@ -381,138 +399,67 @@ int main (int argc, char* argv[])
             LOGLN("Compositing image #" << indices[img_idx]+1);
             full_img = cv::imread(cv::samples::findFile(img_names[img_idx]));   
 
-            // if (!is_compose_scale_set)
-            // {
-            //     if (compose_megapix > 0)
-            //         compose_scale = std::min(1.0, sqrt(compose_megapix * 1e6 / full_img.size().area()));
-            //     is_compose_scale_set = true;
-            //     // Compute relative scales
-            //     compose_work_aspect = compose_scale / work_scale;
-            //     // Update warped image scale
-            //     warped_image_scale *= static_cast<float>(compose_work_aspect);
-            //     warper = warper_creator->create(warped_image_scale);
-            //     // Update corners and sizes
-            //     for (int i = 0; i < num_images; ++i)
-            //     {
-            //         // Update intrinsics
-            //         cameras[i].focal *= compose_work_aspect;
-            //         cameras[i].ppx *= compose_work_aspect;
-            //         cameras[i].ppy *= compose_work_aspect;
-            //         // Update corner and size
-            //         cv::Size sz = full_img_sizes[i];
-            //         if (std::abs(compose_scale - 1) > 1e-1)
-            //         {
-            //             sz.width = cvRound(full_img_sizes[i].width * compose_scale);
-            //             sz.height = cvRound(full_img_sizes[i].height * compose_scale);
-            //         }
-            //         cv::Mat K;
-            //         cameras[i].K().convertTo(K, CV_32F);
-            //         cv::Rect roi = warper->warpRoi(sz, K, cameras[i].R);
-            //         corners[i] = roi.tl();
-            //         sizes[i] = roi.size();
-            //     }
-            // }
             if (abs(compose_scale - 1) > 1e-1)
                 cv::resize(full_img, img, cv::Size(), compose_scale, compose_scale, cv::INTER_LINEAR_EXACT);
             else
                 img = full_img;
+            std::cout << "full_img size: " << full_img.size() << std::endl;
+            std::cout << "img size: " << img.size() << std::endl;
             // cv::imwrite("../res/loop" + std::to_string(loop_count) + "img" + std::to_string(img_idx) + ".jpg", img);
             full_img.release();
             // LOGLN("full img relase, img get ...");
             cv::Size img_size = img.size();
-            cv::Mat K;
-            cameras[img_idx].K().convertTo(K, CV_32F);
+            // cv::Mat K;
+            // cameras[img_idx].K().convertTo(K, CV_32F);
             // Warp the current image
             start_time = std::chrono::high_resolution_clock::now();
-            warper->warp(img, K, cameras[img_idx].R, cv::INTER_LINEAR, cv::BORDER_REFLECT, img_warped);
+            warper->warp(img, intrinsicMat[img_idx], cameras[img_idx].R, cv::INTER_LINEAR, cv::BORDER_REFLECT, img_warped);
             end_time = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
             std::cout << "IMG  warper->warp Elapsed time: " << duration << " ms" << std::endl;
             // cv::imwrite("../res/loop" + std::to_string(loop_count) + "img_warped" + std::to_string(img_idx) + ".jpg", img_warped);
             // LOGLN("img warped");
             // Warp the current image mask
-            mask.create(img_size, CV_8U);
-            mask.setTo(cv::Scalar::all(255));
-            start_time = std::chrono::high_resolution_clock::now();
-            warper->warp(mask, K, cameras[img_idx].R, cv::INTER_NEAREST, cv::BORDER_CONSTANT, mask_warped); // TODO：mask不需要实时计算
+            // mask.create(img_size, CV_8U);
+            // mask.setTo(cv::Scalar::all(255));
+            // start_time = std::chrono::high_resolution_clock::now();
+            // warper->warp(mask, intrinsicMat[img_idx], cameras[img_idx].R, cv::INTER_NEAREST, cv::BORDER_CONSTANT, mask_warped); // TODO：mask不需要实时计算
             // cv::imwrite("../res/loop" + std::to_string(loop_count) + "mask_warped" + std::to_string(img_idx) + ".jpg", mask_warped);
             // LOGLN("mask warped");
-            end_time = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-            std::cout << " MASK warper->warp Elapsed time: " << duration << " ms" << std::endl;
+            // end_time = std::chrono::high_resolution_clock::now();
+            // duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+            // std::cout << " MASK warper->warp Elapsed time: " << duration << " ms" << std::endl;
             // Compensate exposure
             compensator->apply(img_idx, corners[img_idx], img_warped, mask_warped);
             img_warped.convertTo(img_warped_s, CV_16S);
             img_warped.release();
             img.release();
-            mask.release();
+            // mask.release();
             // LOGLN("resource released....");
-            start_time = std::chrono::high_resolution_clock::now();
-            dilate(masks_warped[img_idx], dilated_mask, cv::Mat());
-            end_time = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-            std::cout << " dilate Elapsed time: " << duration << " ms" << std::endl;
+            // start_time = std::chrono::high_resolution_clock::now();
+            // dilate(masks_warped[img_idx], dilated_mask, cv::Mat());
+            // end_time = std::chrono::high_resolution_clock::now();
+            // duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+            // std::cout << " dilate Elapsed time: " << duration << " ms" << std::endl;
             // cv::imwrite("../res/loop" + std::to_string(loop_count) + "dilated_mask" + std::to_string(img_idx) + ".jpg", dilated_mask);
-            cv::resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, cv::INTER_LINEAR_EXACT);
+            // cv::resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, cv::INTER_LINEAR_EXACT);
             // cv::imwrite("../res/loop" + std::to_string(loop_count) + "seam_mask" + std::to_string(img_idx) + ".jpg", seam_mask);
-            mask_warped = seam_mask & mask_warped;
+            // mask_warped = seam_mask & mask_warped;
             // cv::imwrite("../res/loop" + std::to_string(loop_count) + "mask_warped_seam_mask" + std::to_string(img_idx) + ".jpg", mask_warped);
             // LOGLN("final mask generated....");
 
-            // if (!blender && !timelapse) {
-            //     blender = cv::detail::Blender::createDefault(blend_type, try_cuda);
-            //     cv::Size dst_sz = cv::detail::resultRoi(corners, sizes).size();
-            //     float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-            //     if (blend_width < 1.f)
-            //         blender = cv::detail::Blender::createDefault(cv::detail::Blender::NO, try_cuda);
-            //     else if (blend_type == cv::detail::Blender::MULTI_BAND)
-            //     {
-            //         cv::detail::MultiBandBlender* mb = dynamic_cast<cv::detail::MultiBandBlender*>(blender.get());
-            //         mb->setNumBands(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
-            //         LOGLN("Multi-band blender, number of bands: " << mb->numBands());
-            //     }
-            //     else if (blend_type == cv::detail::Blender::FEATHER)
-            //     {
-            //         cv::detail::FeatherBlender* fb = dynamic_cast<cv::detail::FeatherBlender*>(blender.get());
-            //         fb->setSharpness(1.f/blend_width);
-            //         LOGLN("Feather blender, sharpness: " << fb->sharpness());
-            //     }
-            //     blender->prepare(corners, sizes);
-            // }
-            // else if (!timelapser && timelapse){
-            //     timelapser = cv::detail::Timelapser::createDefault(timelapse_type);
-            //     timelapser->initialize(corners, sizes);
-            // }
-            // Blend the current image
-            // if (timelapse){
-            //     LOGLN("timelapse!!!!!");
-            //     timelapser->process(img_warped_s, cv::Mat::ones(img_warped_s.size(), CV_8UC1), corners[img_idx]);
-            //     cv::String fixedFileName;
-            //     size_t pos_s = cv::String(img_names[img_idx]).find_last_of("/\\");
-            //     if (pos_s == cv::String::npos)
-            //     {
-            //         fixedFileName = "fixed_" + img_names[img_idx];
-            //     }
-            //     else
-            //     {
-            //         fixedFileName = "fixed_" + cv::String(img_names[img_idx]).substr(pos_s + 1, cv::String(img_names[img_idx]).length() - pos_s);
-            //     }
-            //     cv::imwrite(fixedFileName, timelapser->getDst());
-            // }
-            // else{
             
-                // LOGLN("NO timelapse, blender feed");
-                // LOGLN("--------------corners[" << img_idx << "]: " << corners[img_idx] << "corner size" << corners.size()); // 打印 corners[img_idx]
-                // LOGLN("--------------size [" << img_idx << "]: " << sizes[img_idx] << "sizes size" << sizes.size()); // 打印 sizes[img_idx]
-                // blender->prepare(corners, sizes);
-                start_time = std::chrono::high_resolution_clock::now();
-                blender->feed(img_warped_s, mask_warped, corners[img_idx]); // 未应用blender,结果保存在blender->blend(result, result_mask)中
-                end_time = std::chrono::high_resolution_clock::now();
-                duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-                std::cout << " blender->feed Elapsed time: " << duration << " ms" << std::endl;
+            // LOGLN("NO timelapse, blender feed");
+            // LOGLN("--------------corners[" << img_idx << "]: " << corners[img_idx] << "corner size" << corners.size()); // 打印 corners[img_idx]
+            // LOGLN("--------------size [" << img_idx << "]: " << sizes[img_idx] << "sizes size" << sizes.size()); // 打印 sizes[img_idx]
+            // blender->prepare(corners, sizes);
+            start_time = std::chrono::high_resolution_clock::now();
+            blender->feed(img_warped_s, saved_final_mask_warped[img_idx], corners[img_idx]); // 未应用blender,结果保存在blender->blend(result, result_mask)中
+            end_time = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+            std::cout << " blender->feed Elapsed time: " << duration << " ms" << std::endl;
 
-                // LOGLN("blender feed done");
-            // }
+            // LOGLN("blender feed done");
         }
         if (!timelapse){
             cv::Mat result, result_mask;
@@ -521,15 +468,14 @@ int main (int argc, char* argv[])
             end_time = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
             std::cout << " blender->blend Elapsed time: " << duration << " ms" << std::endl;
-
             // img_warped_s.release();
-            // mask_warped.release();
             // seam_mask.release();
             LOGLN("Compositing, time: " << ((cv::getTickCount() - t) / cv::getTickFrequency()) << " sec");
             LOGLN("----------------------------------------------------------------------------------");
-            // cv::imwrite("../res/res" + std::to_string(loop_count) + ".jpg",result);
+            cv::imwrite("../res/res" + std::to_string(loop_count) + ".jpg",result);
             loop_count ++;
             // cv::imshow("result", result);
+            // TODO : crop image, manual selection
         }
         if (cv::waitKey(1) == 27)
             break;
